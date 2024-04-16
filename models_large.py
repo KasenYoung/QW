@@ -145,6 +145,14 @@ class GAT_Net(torch.nn.Module):
         x = self.conv2(x, edge_index)
         
         return [x, self.Q]
+    def predict(self,data):
+        x, edge_index = data.x, data.edge_index
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = F.elu(self.conv1(x, edge_index))
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        x = self.conv2(x, edge_index)
+        
+        return x
 
 class GIN_Net(torch.nn.Module):
     def __init__(self, dataset, args):
