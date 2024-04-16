@@ -22,12 +22,12 @@ os.environ['CUDA_VISIBLE_DEVICES']='4'
 def RunExp(args, dataset, data, Net, percls_trn, val_lb):
     
     def train(model, optimizer, data, W_cost, epoch):
-        print(sum(p.numel() for p in model.parameters() if p.requires_grad))
+        #print(sum(p.numel() for p in model.parameters() if p.requires_grad))
         model.train()
         optimizer.zero_grad()
         out_model = model(data, epoch)
         out, Q = out_model[0][data.train_mask], out_model[1]
-        print(out.shape,Q.shape)
+        #print(out.shape,Q.shape)
         if args.Original_ot == 'ot':
             nll = torch.sum(torch.linalg.norm(W_cost * Q, dim=0, ord=1)) + args.lambda_ * F.cross_entropy(
                 out + J_all[data.train_mask] @ Q, data.y[data.train_mask])
@@ -40,8 +40,8 @@ def RunExp(args, dataset, data, Net, percls_trn, val_lb):
         return Q
 
     def test(model, data, Q, J_all, W_cost, epoch):
-        print(Q)
-        torch.save(Q,'./Cora_Q.pt')
+        #print(Q)
+        
         model.eval()
         logits, accs, losses, preds = model(data, epoch)[0], [], [], []
         for _, mask in data('train_mask', 'val_mask', 'test_mask'):
@@ -60,7 +60,24 @@ def RunExp(args, dataset, data, Net, percls_trn, val_lb):
             accs.append(acc)
             losses.append(loss.detach().cpu())
         return accs, preds, losses
-
+    
+    def valid(model, data):
+        #print(Q)
+        
+        model.eval()
+        logits, accs, losses, preds = model.predict(data), [], [], []
+        for _, mask in data('train_mask', 'val_mask', 'test_mask'):
+            
+            pred = torch.softmax(logits[mask],dim=1).max(1)[1]
+            
+            acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
+            y_true = data.y[mask]
+            
+            loss = 1 * F.cross_entropy(logits[mask], y_true)
+            preds.append(pred.detach().cpu())
+            accs.append(acc)
+            losses.append(loss.detach().cpu())
+        return accs, preds, losses
 
     device = torch.device('cuda:' + str(args.device) if torch.cuda.is_available() else 'cpu')
     if not args.full and args.dataset in ['Chameleon', 'Squirrel']:
@@ -81,7 +98,65 @@ def RunExp(args, dataset, data, Net, percls_trn, val_lb):
     # J_all and W_cost for OT-GNN
     J_all, W_cost = J_W_cost(args, data, device)
     if args.Original_ot == 'ot':
-        if args.net in ['ChebNetII', 'ChebBase']:
+        if args.net=='GCN':
+            if args.A_F:
+                optimizer = torch.optim.Adam(
+                    [{'params': model.conv1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                    {'params': model.conv2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                    {'params': model.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr},
+                    {'params': model.lin1.parameters(), 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr},
+                    {'params': model.lin2.parameters(), 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 ])
+            else:
+                optimizer = torch.optim.Adam(
+                    [{'params': model.conv1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                    {'params': model.conv2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                    {'params': model.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 ])
+        elif args.net=='GAT':
+            optimizer = torch.optim.Adam(
+                [{'params': model.conv1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.conv2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.gcn1_dual.parameters(), 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr},
+                 #{'params': model.gcn2_dual.parameters(), 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 #{'params': model.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 ])
+        elif args.net == 'GIN':
+            optimizer = torch.optim.Adam(
+                [{'params': model.conv1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.conv2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 ])
+        elif args.net == 'GSAGE':
+            optimizer = torch.optim.Adam(
+                [{'params': model.conv1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.conv2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 ])
+        elif args.net=='APPNP':
+            optimizer = torch.optim.Adam(
+                [{'params': model.lin1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.lin2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.prop1.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 ])
+        elif args.net =='BernNet':
+            if args.A_F:
+                optimizer = torch.optim.Adam(
+                    [{'params': model.lin1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                     {'params': model.lin2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                     {'params': model.prop1.temp, 'weight_decay': 0.0, 'lr': args.Bern_lr},
+                     {'params': model.prop1.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr},
+                     {'params': model.prop1.lin1.parameters(), 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr},
+                     {'params': model.prop1.lin2.parameters(), 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr},
+                     ])
+            else:
+                optimizer = torch.optim.Adam(
+                [{'params': model.lin1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.lin2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.prop1.temp, 'weight_decay': 0.0, 'lr': args.Bern_lr},
+                 {'params': model.prop1.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
+                 ])
+        elif args.net in ['ChebNetII']:
             if args.A_F:
                 optimizer = torch.optim.Adam(
                 [{'params': model.lin1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
@@ -98,12 +173,15 @@ def RunExp(args, dataset, data, Net, percls_trn, val_lb):
                      {'params': model.lin2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
                      {'params': model.prop1.temp, 'weight_decay': args.prop_wd, 'lr': args.prop_lr},
                      {'params': model.prop1.Q, 'weight_decay': args.q_linear_delay, 'lr': args.q_linear_lr}
-
                      ])
-        else:
-            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     else:
-        if args.net in ['ChebNetII', 'ChebBase']:
+        if args.net =='BernNet':
+            optimizer = torch.optim.Adam(
+                [{'params': model.lin1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.lin2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
+                 {'params': model.prop1.temp, 'weight_decay': 0.0, 'lr': args.Bern_lr},
+                 ])
+        elif args.net in ['ChebNetII']:
             optimizer = torch.optim.Adam(
                 [{'params': model.lin1.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
                  {'params': model.lin2.parameters(), 'weight_decay': args.weight_decay, 'lr': args.lr},
@@ -112,20 +190,22 @@ def RunExp(args, dataset, data, Net, percls_trn, val_lb):
         else:
             optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-
-    best_val_acc = test_acc = 0
+    best_val_acc = test_acc = best_gnn_acc=0
     best_val_loss = float('inf')
     val_loss_history = []
     val_acc_history = []
+
 
     time_run = []
     for epoch in range(args.epochs):
         t_st = time.time()
         Q = train(model, optimizer, data, W_cost, epoch)
+       
+        torch.save(Q,f'./Q/{args.dataset}_Q.pt')
         time_epoch = time.time() - t_st  # each epoch train times
         time_run.append(time_epoch)
         [train_acc, val_acc, tmp_test_acc], preds, [train_loss, val_loss, tmp_test_loss] = test(model, data, Q, J_all, W_cost, epoch)
-
+        [train_gnn_acc,val_gnn_acc,test_gnn_acc]=valid(model,data)[0]
         if val_loss < best_val_loss:
             best_val_acc = val_acc
             best_val_loss = val_loss
@@ -139,6 +219,8 @@ def RunExp(args, dataset, data, Net, percls_trn, val_lb):
                 theta = TEST.detach().cpu().numpy()
             else:
                 theta = args.alpha
+        if test_gnn_acc>best_gnn_acc:
+            best_gnn_acc=test_gnn_acc
 
         if epoch >= 0:
             val_loss_history.append(val_loss)
@@ -148,7 +230,7 @@ def RunExp(args, dataset, data, Net, percls_trn, val_lb):
                     val_loss_history[-(args.early_stopping + 1):-1])
                 if val_loss > tmp.mean().item():
                     break
-    return test_acc, best_val_acc, theta, time_run
+    return test_acc, best_val_acc, theta, time_run,best_gnn_acc
 
 
 if __name__ == '__main__':
@@ -158,7 +240,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.01, help='learning rate.')
     parser.add_argument('--weight_decay', type=float, default=0.0, help='weight decay.')
     parser.add_argument('--early_stopping', type=int, default=200, help='early stopping.')
-    parser.add_argument('--hidden', type=int, default=64, help='hidden units.')
+    parser.add_argument('--hidden', type=int, default=128, help='hidden units.')
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout for neural networks.')
 
     parser.add_argument('--train_rate', type=float, default=0.6, help='train set rate.')
@@ -287,10 +369,10 @@ if __name__ == '__main__':
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-        test_acc, best_val_acc, theta_0, time_run = RunExp(args, dataset, data, Net, percls_trn, val_lb)
+        test_acc, best_val_acc, theta_0, time_run,best_gnn_acc= RunExp(args, dataset, data, Net, percls_trn, val_lb)
         time_results.append(time_run)
         results.append([test_acc, best_val_acc])
-        print(f'run_{str(RP + 1)} \t test_acc: {test_acc:.4f}')
+        print(f'run_{str(RP + 1)} \t test_acc: {test_acc:.4f}, gnn_acc: {best_gnn_acc:.4f}')
         if args.net in ["ChebBase", "ChebNetII"]:
             print('Weights:', [float('{:.4f}'.format(i)) for i in theta_0])
 
@@ -309,7 +391,7 @@ if __name__ == '__main__':
     print(f'{gnn_name} on dataset {args.dataset}, in {args.runs} repeated experiment:')
     print(f'test acc mean = {test_acc_mean:.4f} ± {uncertainty * 100:.4f}  \t val acc mean = {val_acc_mean:.4f}')
 
-    with open('./logs/'+'logs-1_' + args.net + '_QW_' + args.dataset, 'a+') as f:
+    with open('./newlogs/'+'logs-1_' + args.net + '_QW_' + args.dataset, 'a+') as f:
         f.write(
             'net:{}, Original_ot:{}, train_rate:{}, val_rate:{}, lr:{}, weight_decay:{}, dropout:{}, prop_lr:{}, prop_wd:{}, dprate:{}, lambda_:{}, q_linear_lr:{}, q_linear_delay:{}, A_F:{},sample_graph:{},sample_linegraph:{},sample_method:{},kmis_k:{},random_p:{}\n'.format(
                 args.net, args.Original_ot, args.train_rate, args.val_rate,
